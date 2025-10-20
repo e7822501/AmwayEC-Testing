@@ -343,7 +343,7 @@ public class GlobalExceptionHandler {
 - DB_URL: localhost
 - REDIS_HOST: localhost
 
-**生產環境：**
+**正式環境：**
 - DB_URL: mysql-cluster.prod
 - REDIS_HOST: redis-cluster.prod
 - JWT_SECRET: 使用環境變數注入
