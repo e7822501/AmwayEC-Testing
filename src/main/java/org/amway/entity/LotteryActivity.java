@@ -33,6 +33,15 @@ public class LotteryActivity {
     @Column(name = "end_time", nullable = false)
     private LocalDateTime endTime;
 
+    /**
+     * 抽獎次數限制類型
+     * TOTAL: 活動期間總次數限制
+     * DAILY: 每日限制
+     * WEEKLY: 每週限制
+     */
+    @Column(name = "limit_type", nullable = false, length = 20)
+    private String limitType = "TOTAL";
+
     @Column(name = "max_draws_per_user", nullable = false)
     private Integer maxDrawsPerUser = 1;
 
@@ -52,7 +61,9 @@ public class LotteryActivity {
     private LocalDateTime updatedAt;
 
     public enum ActivityStatus {
-        ACTIVE, INACTIVE, ENDED
+        ACTIVE,     // 進行中
+        INACTIVE,   // 停用
+        ENDED       // 已結束
     }
 
     /**

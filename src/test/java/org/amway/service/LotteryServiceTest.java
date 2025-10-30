@@ -4,8 +4,8 @@ import org.amway.dto.request.DrawRequest;
 import org.amway.dto.response.DrawResponse;
 import org.amway.dto.response.DrawResult;
 import org.amway.entity.*;
-import org.amway.exception.InsufficientDrawsException;
-import org.amway.exception.InvalidActivityException;
+import org.amway.exception.BusinessException;
+import org.amway.exception.enums.ErrorCode;
 import org.amway.repository.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -14,10 +14,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.Optional;
@@ -28,6 +31,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("抽獎服務測試")
 class LotteryServiceTest {
 
@@ -42,6 +46,9 @@ class LotteryServiceTest {
 
     @Mock
     private UserDrawStatisticsRepository statisticsRepository;
+
+    @Mock
+    private UserDailyDrawStatisticsRepository dailyStatisticsRepository;
 
     @Mock
     private UserRepository userRepository;
@@ -75,6 +82,7 @@ class LotteryServiceTest {
         testActivity.setStartTime(LocalDateTime.now().minusDays(1));
         testActivity.setEndTime(LocalDateTime.now().plusDays(1));
         testActivity.setMaxDrawsPerUser(5);
+        testActivity.setLimitType("TOTAL"); // 默認總次數限制
         testActivity.setStatus(LotteryActivity.ActivityStatus.ACTIVE);
 
         // 獎品設置
@@ -105,10 +113,10 @@ class LotteryServiceTest {
         noPrize.setPrizeType(Prize.PrizeType.NO_PRIZE);
         noPrize.setActivity(testActivity);
 
-        // 若測試未用到鎖則用 lenient() 包裝
-        lenient().when(redissonClient.getLock(anyString())).thenReturn(lock);
-        lenient().when(lock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
-        lenient().when(lock.isHeldByCurrentThread()).thenReturn(true);
+        // Mock Redis 鎖（使用 lenient）
+        when(redissonClient.getLock(anyString())).thenReturn(lock);
+        when(lock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        when(lock.isHeldByCurrentThread()).thenReturn(true);
     }
 
     @Test
@@ -125,14 +133,19 @@ class LotteryServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
         when(statisticsRepository.findByUserIdAndActivityIdWithLock(1L, 1L))
                 .thenReturn(Optional.of(statistics));
+        when(statisticsRepository.findByUserIdAndActivityId(1L, 1L))
+                .thenReturn(Optional.of(statistics));
         when(prizeRepository.findByActivityId(1L))
                 .thenReturn(Arrays.asList(prize1, prize2, noPrize));
-
-        // 使用 lenient() 因為這個 stub 可能不會被調用（取決於機率）
-        lenient().when(prizeRepository.findByIdWithLock(anyLong()))
+        when(prizeRepository.findByIdWithLock(anyLong()))
                 .thenReturn(Optional.of(prize1));
-
         when(drawRecordRepository.save(any(DrawRecord.class)))
+                .thenAnswer(invocation -> {
+                    DrawRecord record = invocation.getArgument(0);
+                    record.setId(1L); // 設置 ID
+                    return record;
+                });
+        when(statisticsRepository.save(any(UserDrawStatistics.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
@@ -148,7 +161,6 @@ class LotteryServiceTest {
         verify(drawRecordRepository).save(any(DrawRecord.class));
     }
 
-
     @Test
     @DisplayName("測試多次抽獎")
     void testMultipleDraws() {
@@ -163,11 +175,19 @@ class LotteryServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
         when(statisticsRepository.findByUserIdAndActivityIdWithLock(1L, 1L))
                 .thenReturn(Optional.of(statistics));
+        when(statisticsRepository.findByUserIdAndActivityId(1L, 1L))
+                .thenReturn(Optional.of(statistics));
         when(prizeRepository.findByActivityId(1L))
                 .thenReturn(Arrays.asList(prize1, prize2, noPrize));
         when(prizeRepository.findByIdWithLock(anyLong()))
                 .thenReturn(Optional.of(noPrize));
         when(drawRecordRepository.save(any(DrawRecord.class)))
+                .thenAnswer(invocation -> {
+                    DrawRecord record = invocation.getArgument(0);
+                    record.setId(System.currentTimeMillis()); // 設置唯一 ID
+                    return record;
+                });
+        when(statisticsRepository.save(any(UserDrawStatistics.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
@@ -194,13 +214,15 @@ class LotteryServiceTest {
 
         when(activityRepository.findById(1L)).thenReturn(Optional.of(testActivity));
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
-        when(statisticsRepository.findByUserIdAndActivityIdWithLock(1L, 1L))
+        when(statisticsRepository.findByUserIdAndActivityId(1L, 1L))
                 .thenReturn(Optional.of(statistics));
 
         // Act & Assert
-        assertThrows(InsufficientDrawsException.class, () -> {
+        BusinessException exception = assertThrows(BusinessException.class, () -> {
             lotteryService.draw(1L, request);
         });
+
+        assertEquals(ErrorCode.INSUFFICIENT_DRAWS, exception.getErrorCode());
     }
 
     @Test
@@ -212,9 +234,11 @@ class LotteryServiceTest {
         when(activityRepository.findById(999L)).thenReturn(Optional.empty());
 
         // Act & Assert
-        assertThrows(InvalidActivityException.class, () -> {
+        BusinessException exception = assertThrows(BusinessException.class, () -> {
             lotteryService.draw(1L, request);
         });
+
+        assertEquals(ErrorCode.RESOURCE_NOT_FOUND, exception.getErrorCode());
     }
 
     @Test
@@ -227,9 +251,11 @@ class LotteryServiceTest {
         when(activityRepository.findById(1L)).thenReturn(Optional.of(testActivity));
 
         // Act & Assert
-        assertThrows(InvalidActivityException.class, () -> {
+        BusinessException exception = assertThrows(BusinessException.class, () -> {
             lotteryService.draw(1L, request);
         });
+
+        assertEquals(ErrorCode.ACTIVITY_NOT_ACTIVE, exception.getErrorCode());
     }
 
     @Test
@@ -253,11 +279,19 @@ class LotteryServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
         when(statisticsRepository.findByUserIdAndActivityIdWithLock(1L, 1L))
                 .thenReturn(Optional.of(statistics));
+        when(statisticsRepository.findByUserIdAndActivityId(1L, 1L))
+                .thenReturn(Optional.of(statistics));
         when(prizeRepository.findByActivityId(1L))
                 .thenReturn(Arrays.asList(prize1, prize2, noPrize));
         when(prizeRepository.findByIdWithLock(anyLong()))
                 .thenReturn(Optional.of(prize1));
         when(drawRecordRepository.save(any(DrawRecord.class)))
+                .thenAnswer(invocation -> {
+                    DrawRecord record = invocation.getArgument(0);
+                    record.setId(1L);
+                    return record;
+                });
+        when(statisticsRepository.save(any(UserDrawStatistics.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
@@ -267,7 +301,6 @@ class LotteryServiceTest {
         assertEquals(4, prize1.getRemainingStock(), "庫存應該被扣 1");
         verify(prizeRepository).save(prize1);
     }
-
 
     @Test
     @DisplayName("測試機率分布")
@@ -287,6 +320,8 @@ class LotteryServiceTest {
         when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
         when(statisticsRepository.findByUserIdAndActivityIdWithLock(1L, 1L))
                 .thenReturn(Optional.of(statistics));
+        when(statisticsRepository.findByUserIdAndActivityId(1L, 1L))
+                .thenReturn(Optional.of(statistics));
         when(prizeRepository.findByActivityId(1L))
                 .thenReturn(Arrays.asList(prize1, prize2, noPrize));
         when(prizeRepository.findByIdWithLock(anyLong()))
@@ -297,6 +332,12 @@ class LotteryServiceTest {
                     return Optional.of(noPrize);
                 });
         when(drawRecordRepository.save(any(DrawRecord.class)))
+                .thenAnswer(invocation -> {
+                    DrawRecord record = invocation.getArgument(0);
+                    record.setId(System.currentTimeMillis());
+                    return record;
+                });
+        when(statisticsRepository.save(any(UserDrawStatistics.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
         // Act
@@ -313,5 +354,102 @@ class LotteryServiceTest {
         // 驗證中獎率在合理範圍內 (10% + 20% = 30%, 允許±10%誤差)
         assertTrue(winningCount >= 200 && winningCount <= 400,
                 "中獎次數應在200-400之間，實際：" + winningCount);
+    }
+
+    @Test
+    @DisplayName("測試每日限制模式")
+    void testDailyLimitMode() {
+        // Arrange
+        testActivity.setLimitType("DAILY");
+        testActivity.setMaxDrawsPerUser(3);
+
+        DrawRequest request = new DrawRequest(1L, 3);
+        LocalDate today = LocalDate.now();
+
+        UserDailyDrawStatistics dailyStats = new UserDailyDrawStatistics();
+        dailyStats.setUserId(1L);
+        dailyStats.setActivityId(1L);
+        dailyStats.setDrawDate(today);
+        dailyStats.setDailyDraws(0);
+        dailyStats.setDailyWinningDraws(0);
+
+        when(activityRepository.findById(1L)).thenReturn(Optional.of(testActivity));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
+        when(dailyStatisticsRepository.findByUserIdAndActivityIdAndDrawDate(1L, 1L, today))
+                .thenReturn(Optional.of(dailyStats));
+        when(prizeRepository.findByActivityId(1L))
+                .thenReturn(Arrays.asList(prize1, prize2, noPrize));
+        when(prizeRepository.findByIdWithLock(anyLong()))
+                .thenReturn(Optional.of(noPrize));
+        when(drawRecordRepository.save(any(DrawRecord.class)))
+                .thenAnswer(invocation -> {
+                    DrawRecord record = invocation.getArgument(0);
+                    record.setId(System.currentTimeMillis());
+                    return record;
+                });
+        when(dailyStatisticsRepository.save(any(UserDailyDrawStatistics.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Act
+        DrawResponse response = lotteryService.draw(1L, request);
+
+        // Assert
+        assertNotNull(response);
+        assertEquals(3, response.getDrawCount());
+        assertEquals(0, response.getRemainingDraws(), "每日次數應該用完");
+        assertEquals(3, dailyStats.getDailyDraws());
+
+        verify(dailyStatisticsRepository).save(any(UserDailyDrawStatistics.class));
+    }
+
+    @Test
+    @DisplayName("測試總次數限制模式")
+    void testTotalLimitMode() {
+        // Arrange
+        testActivity.setLimitType("TOTAL");
+        testActivity.setMaxDrawsPerUser(5);
+
+        DrawRequest request1 = new DrawRequest(1L, 3);
+        UserDrawStatistics statistics = new UserDrawStatistics();
+        statistics.setTotalDraws(0);
+        statistics.setUser(testUser);
+        statistics.setActivity(testActivity);
+
+        when(activityRepository.findById(1L)).thenReturn(Optional.of(testActivity));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(testUser));
+        when(statisticsRepository.findByUserIdAndActivityIdWithLock(1L, 1L))
+                .thenReturn(Optional.of(statistics));
+        when(statisticsRepository.findByUserIdAndActivityId(1L, 1L))
+                .thenReturn(Optional.of(statistics));
+        when(prizeRepository.findByActivityId(1L))
+                .thenReturn(Arrays.asList(prize1, prize2, noPrize));
+        when(prizeRepository.findByIdWithLock(anyLong()))
+                .thenReturn(Optional.of(noPrize));
+        when(drawRecordRepository.save(any(DrawRecord.class)))
+                .thenAnswer(invocation -> {
+                    DrawRecord record = invocation.getArgument(0);
+                    record.setId(System.currentTimeMillis());
+                    return record;
+                });
+        when(statisticsRepository.save(any(UserDrawStatistics.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        // Act - 第一次抽 3 次
+        DrawResponse response1 = lotteryService.draw(1L, request1);
+
+        // Assert
+        assertNotNull(response1);
+        assertEquals(3, response1.getDrawCount());
+        assertEquals(2, response1.getRemainingDraws(), "剩餘 2 次");
+
+        // Act - 第二次抽 2 次
+        DrawRequest request2 = new DrawRequest(1L, 2);
+        DrawResponse response2 = lotteryService.draw(1L, request2);
+
+        // Assert
+        assertNotNull(response2);
+        assertEquals(2, response2.getDrawCount());
+        assertEquals(0, response2.getRemainingDraws(), "總次數用完");
+        assertEquals(5, statistics.getTotalDraws());
     }
 }

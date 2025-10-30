@@ -1,6 +1,7 @@
 spring:
   application:
     name: lottery-system
+
   datasource:
     url: ${DB_URL:jdbc:mysql://localhost:3306/lottery_db?useSSL=false&serverTimezone=UTC}
     username: ${DB_USERNAME:root}
@@ -30,23 +31,35 @@ spring:
         max-active: ${REDIS_POOL_MAX_ACTIVE:20}
         max-idle: ${REDIS_POOL_MAX_IDLE:10}
         min-idle: ${REDIS_POOL_MIN_IDLE:5}
+    timeout: 5000ms  # Redis 超時時間
 
   cache:
     type: redis
     redis:
       time-to-live: 3600000
 
+# JWT 配置
 jwt:
-  secret: ${JWT_SECRET:yourSecretKeyForJWTTokenGeneration}
-  expiration: ${JWT_EXPIRATION:86400000}
+  secret: ${JWT_SECRET:yourSecretKeyForJWTTokenGenerationMustBeLongerThan256Bits}
+  access-token-expiration: ${JWT_ACCESS_EXPIRATION:3600000}  # 1小時
+  refresh-token-expiration: ${JWT_REFRESH_EXPIRATION:604800000}  # 7天
 
+# 日誌配置
 logging:
   level:
     root: INFO
-    com.lottery: ${LOG_LEVEL:DEBUG}
+    org.amway: ${LOG_LEVEL:DEBUG}
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
 
+# Swagger 配置
 springdoc:
   api-docs:
     path: /api-docs
   swagger-ui:
     path: /swagger-ui.html
+
+# 限流配置
+rate-limit:
+  global-qps: ${GLOBAL_QPS:1000}  # 全局每秒請求數
+  user-qps: ${USER_QPS:1}         # 每個用戶每秒請求數
