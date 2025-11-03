@@ -1,5 +1,5 @@
 -- ============================================
--- 電商抽獎系統數據庫設計（改進版）
+-- 電商抽獎系統數據庫設計
 -- ============================================
 
 -- 1. 用戶表（新增 VIP 等級等）
@@ -95,17 +95,20 @@ CREATE TABLE IF NOT EXISTS user_daily_draw_statistics (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用戶每日抽獎統計表';
 
 -- 6. 活動即時統計快取表（用於管理後台）
-CREATE TABLE IF NOT EXISTS activity_realtime_statistics (
+CREATE TABLE IF NOT EXISTS user_draw_statistics (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    activity_id BIGINT NOT NULL UNIQUE,
-    total_participants INT NOT NULL DEFAULT 0 COMMENT '總參與人數',
-    total_draws INT NOT NULL DEFAULT 0 COMMENT '總抽獎次數',
-    total_winning_draws INT NOT NULL DEFAULT 0 COMMENT '總中獎次數',
-    winning_rate DECIMAL(5, 2) COMMENT '中獎率(%)',
-    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (activity_id) REFERENCES lottery_activities(id) ON DELETE CASCADE,
-    INDEX idx_activity_id (activity_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='活動即時統計快取表';
+    user_id BIGINT NOT NULL,
+    activity_id BIGINT NOT NULL,
+    total_draws INT NOT NULL DEFAULT 0,
+    winning_draws INT NOT NULL DEFAULT 0,
+    last_draw_time DATETIME DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_user_activity (user_id, activity_id),
+    CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id),
+    CONSTRAINT fk_activity FOREIGN KEY (activity_id) REFERENCES lottery_activities(id)
+);
+
 
 -- ============================================
 -- 測試數據 (DML)
@@ -128,7 +131,3 @@ INSERT INTO prizes (activity_id, name, description, total_stock, remaining_stock
 (1, 'AirPods Pro', 'Apple AirPods Pro 第二代', 50, 50, 0.05, 'PHYSICAL'),
 (1, '100元購物金', '平台通用購物金', 500, 500, 0.14, 'VIRTUAL'),
 (1, '銘謝惠顧', '謝謝參與', 999999, 999999, 0.80, 'NO_PRIZE');
-
--- 初始化活動統計
-INSERT INTO activity_realtime_statistics (activity_id, total_participants, total_draws, total_winning_draws, winning_rate) 
-SELECT id, 0, 0, 0, 0.00 FROM lottery_activities;

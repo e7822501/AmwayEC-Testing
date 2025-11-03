@@ -1,7 +1,7 @@
 package org.amway.exception.enums;
 
 /**
- * 業務錯誤碼枚舉
+ * 業務錯誤碼
  */
 public enum ErrorCode {
 

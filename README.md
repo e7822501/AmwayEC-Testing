@@ -1,7 +1,5 @@
 # 電商轉盤抽獎系統
 
-> 一個基於 Spring Boot 3.2 的企業級高併發分散式抽獎系統，完全符合電商平台的高可用、高性能、高一致性需求。
-
 ## 📋 目錄
 
 - [系統概述](#系統概述)
@@ -24,8 +22,8 @@
 -  **多獎品配置**：支持 N 種獎品，每種獎品可獨立設定庫存和中獎機率
 -  **精準控制**：確保所有獎品機率總和為 100%（含銘謝惠顧）
 -  **抽獎**：支持單次/多次連續抽獎，每個活動可自訂次數限制（TOTAL/DAILY/WEEKLY）
-- ️**風控防護**：採用三層防護（分佈式鎖 + 悲觀鎖 + 事務），100% 防止重複抽獎和庫存超抽
--  **高併發**：峰值支持 1000+ QPS
+-  ️**風控防護**：採用三層防護（分佈式鎖 + 悲觀鎖 + 事務），100% 防止重複抽獎和庫存超抽
+-  **高併發**：支持 1000+ QPS
 -  **分散式部署**：支持水平擴展，多實例無狀態運行
 -  **限流**：支持全局限流和用戶維度限流，防止系統過載
 
@@ -117,7 +115,7 @@ AmwayEC-Testing/
 │   │   │   │   └── UserDrawStatistics.java
 │   │   │   ├── exception/
 │   │   │   │   ├── enums/
-│   │   │   │   │   └── ErrorCode.java            # 錯誤代碼枚舉
+│   │   │   │   │   └── ErrorCode.java            # 錯誤代碼
 │   │   │   │   ├── response/
 │   │   │   │   │   └── ErrorResponse.java        # 錯誤響應
 │   │   │   │   ├── BusinessException.java        # 業務異常
@@ -130,12 +128,12 @@ AmwayEC-Testing/
 │   │   │   │   ├── UserDrawStatisticsRepository.java
 │   │   │   │   └── UserRepository.java
 │   │   │   ├── security/
-│   │   │   │   ├── JwtAuthenticationFilter.java  # JWT 過濾器
+│   │   │   │   ├── JwtAuthenticationFilter.java  # JWT Filter
 │   │   │   │   └── JwtUtil.java                  # JWT 工具
 │   │   │   ├── service/
 │   │   │   │   ├── ActivityService.java          # 活動服務
 │   │   │   │   └── LotteryService.java           # 抽獎核心服務
-│   │   │   └── LotteryApplication.java           # Spring Boot 入口
+│   │   │   └── LotteryApplication.java           # Spring Boot Application
 │   │   └── resources/
 │   │       ├── application.yml                   # 應用配置
 │   │       └── application-test.yml              # 測試配置
@@ -145,7 +143,7 @@ AmwayEC-Testing/
 │       │   └── LotteryServiceTest.java           # 單元測試
 │       └── resources/
 │           └── application-test.yml              # 測試配置
-├── build.gradle.kts                              # Gradle 構建配置
+├── build.gradle.kts                              # Gradle
 ├── schema.sql                                     # 數據庫初始化腳本
 ├── README.md                                     # 本文件                            # 技術架構詳解
 └── .gitignore
@@ -221,7 +219,7 @@ private Prize selectPrizeByProbability(List<Prize> prizes) {
 ```
 [第一層] Redis 分佈式鎖 (Redisson)
   └─ 防止同一用戶併發重複抽獎
-  └─ 鎖粒度：userId + activityId
+  └─ 顆粒度：userId + activityId
   └─ 超時設置：等待 10s，持有 30s
 
 [第二層] 數據庫悲觀鎖
@@ -231,7 +229,7 @@ private Prize selectPrizeByProbability(List<Prize> prizes) {
 
 [第三層] 事務管理
   └─ @Transactional
-  └─ 任何異常自動回滾
+  └─ 任何異常自動Rollback
   └─ 保證統計數據一致性
 ```
 
@@ -257,106 +255,126 @@ private Prize selectPrizeByProbability(List<Prize> prizes) {
 
 #### users (用戶表)
 ```sql
-CREATE TABLE users (
+-- 1. 用戶表（新增 VIP 等級等）
+CREATE TABLE IF NOT EXISTS users (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     username VARCHAR(50) NOT NULL UNIQUE,
     password VARCHAR(255) NOT NULL,
     email VARCHAR(100),
-    role VARCHAR(20) NOT NULL DEFAULT 'USER',
+    role VARCHAR(20) NOT NULL DEFAULT 'USER' COMMENT 'USER, ADMIN',
+    vip_level INT NOT NULL DEFAULT 0 COMMENT 'VIP 等級，影響抽獎次數',
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_username (username)
-);
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_username (username),
+    INDEX idx_email (email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用戶表';
 ```
 
 #### lottery_activities (活動表)
 ```sql
-CREATE TABLE lottery_activities (
+-- 2. 抽獎活動表
+CREATE TABLE IF NOT EXISTS lottery_activities (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     description TEXT,
-    start_time TIMESTAMP NOT NULL,
-    end_time TIMESTAMP NOT NULL,
-    limit_type VARCHAR(20) NOT NULL DEFAULT 'TOTAL',
-    max_draws_per_user INT NOT NULL DEFAULT 1,
-    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+    start_time TIMESTAMP NOT NULL COMMENT '活動開始時間',
+    end_time TIMESTAMP NOT NULL COMMENT '活動結束時間',
+    
+    -- 抽獎次數限制配置
+    limit_type VARCHAR(20) NOT NULL DEFAULT 'TOTAL' COMMENT 'TOTAL(總次數), DAILY(每日), WEEKLY(每週)',
+    max_draws_per_user INT NOT NULL DEFAULT 1 COMMENT '每人抽獎次數上限',
+    
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' COMMENT 'ACTIVE, INACTIVE, ENDED',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_status (status),
-    INDEX idx_time (start_time, end_time)
-);
+    INDEX idx_time_range (start_time, end_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='抽獎活動表';
 ```
 
 #### prizes (獎品表)
 ```sql
-CREATE TABLE prizes (
+-- 3. 獎品表
+CREATE TABLE IF NOT EXISTS prizes (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     activity_id BIGINT NOT NULL,
     name VARCHAR(100) NOT NULL,
     description TEXT,
-    total_stock INT NOT NULL,
-    remaining_stock INT NOT NULL,
-    probability DECIMAL(10, 6) NOT NULL,
-    prize_type VARCHAR(20) NOT NULL,
+    total_stock INT NOT NULL DEFAULT 0 COMMENT '總庫存',
+    remaining_stock INT NOT NULL DEFAULT 0 COMMENT '剩餘庫存',
+    probability DECIMAL(10, 6) NOT NULL COMMENT '中獎機率 (0-1之間)',
+    prize_type VARCHAR(20) NOT NULL DEFAULT 'PHYSICAL' COMMENT 'PHYSICAL, VIRTUAL, NO_PRIZE',
     image_url VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_activity FOREIGN KEY (activity_id) REFERENCES lottery_activities(id),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (activity_id) REFERENCES lottery_activities(id) ON DELETE CASCADE,
+    INDEX idx_activity_id (activity_id),
+    INDEX idx_remaining_stock (remaining_stock),
     CONSTRAINT chk_probability CHECK (probability >= 0 AND probability <= 1),
-    CONSTRAINT chk_stock CHECK (remaining_stock >= 0),
-    INDEX idx_activity (activity_id),
-    INDEX idx_stock (remaining_stock)
-);
+    CONSTRAINT chk_stock CHECK (remaining_stock >= 0 AND remaining_stock <= total_stock)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='獎品表';
 ```
 
 #### draw_records (抽獎記錄表)
 ```sql
-CREATE TABLE draw_records (
+-- 4. 抽獎記錄表
+CREATE TABLE IF NOT EXISTS draw_records (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     activity_id BIGINT NOT NULL,
     user_id BIGINT NOT NULL,
     prize_id BIGINT,
+    draw_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    draw_date DATE GENERATED ALWAYS AS (DATE(draw_time)) STORED COMMENT '抽獎日期（用於每日統計）',
     is_winning BOOLEAN NOT NULL DEFAULT FALSE,
     prize_name VARCHAR(100),
-    draw_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED',
-    CONSTRAINT fk_activity FOREIGN KEY (activity_id) REFERENCES lottery_activities(id),
-    CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id),
-    CONSTRAINT fk_prize FOREIGN KEY (prize_id) REFERENCES prizes(id),
+    status VARCHAR(20) NOT NULL DEFAULT 'COMPLETED' COMMENT 'COMPLETED, FAILED, CANCELLED',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (activity_id) REFERENCES lottery_activities(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (prize_id) REFERENCES prizes(id) ON DELETE SET NULL,
     INDEX idx_user_activity (user_id, activity_id),
-    INDEX idx_activity_time (activity_id, draw_time)
-);
+    INDEX idx_user_activity_date (user_id, activity_id, draw_date),
+    INDEX idx_activity_time (activity_id, draw_time),
+    INDEX idx_user_time (user_id, draw_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='抽獎記錄表';
 ```
 
-#### user_draw_statistics (用戶統計表)
+#### user_daily_draw_statistics (用戶統計表)
 ```sql
+-- 5. 用戶每日抽獎統計表
+CREATE TABLE IF NOT EXISTS user_daily_draw_statistics (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    activity_id BIGINT NOT NULL,
+    draw_date DATE NOT NULL COMMENT '抽獎日期',
+    daily_draws INT NOT NULL DEFAULT 0 COMMENT '當日抽獎次數',
+    daily_winning_draws INT NOT NULL DEFAULT 0 COMMENT '當日中獎次數',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_user_activity_date (user_id, activity_id, draw_date),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (activity_id) REFERENCES lottery_activities(id) ON DELETE CASCADE,
+    INDEX idx_user_id (user_id),
+    INDEX idx_activity_date (activity_id, draw_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用戶每日抽獎統計表';
+```
+
+#### user_daily_statistics (每日統計表)
+```sql
+-- 6. 每日統計表（用於管理後台）
 CREATE TABLE user_draw_statistics (
     id BIGINT AUTO_INCREMENT PRIMARY KEY,
     user_id BIGINT NOT NULL,
     activity_id BIGINT NOT NULL,
     total_draws INT NOT NULL DEFAULT 0,
     winning_draws INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    last_draw_time DATETIME DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_user_activity (user_id, activity_id),
     CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id),
-    CONSTRAINT fk_activity FOREIGN KEY (activity_id) REFERENCES lottery_activities(id),
-    UNIQUE KEY uk_user_activity (user_id, activity_id)
-);
-```
-
-#### user_daily_draw_statistics (每日統計表)
-```sql
-CREATE TABLE user_daily_draw_statistics (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    activity_id BIGINT NOT NULL,
-    draw_date DATE NOT NULL,
-    daily_draws INT NOT NULL DEFAULT 0,
-    daily_winning_draws INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id),
-    CONSTRAINT fk_activity FOREIGN KEY (activity_id) REFERENCES lottery_activities(id),
-    UNIQUE KEY uk_user_activity_date (user_id, activity_id, draw_date)
+    CONSTRAINT fk_activity FOREIGN KEY (activity_id) REFERENCES lottery_activities(id)
 );
 ```
 
@@ -381,7 +399,7 @@ public @interface RateLimit {
 @Component
 public class RateLimitAspect {
     
-    @Around("@annotation(rateLimit)")
+    @Around("@annotation(org.amway.annotation.RateLimit)")
     public Object rateLimit(ProceedingJoinPoint pjp, RateLimit rateLimit) 
             throws Throwable {
         // 1. 獲取全局限流器
@@ -409,47 +427,32 @@ public ApiResponse<DrawResponse> draw(
 ```yaml
 # application.yml
 rate-limiter:
-  global:
-    permits-per-second: 1000  # 全局限流：每秒 1000 次
-  user:
-    permits-per-second: 10    # 用戶維度：每個用戶每秒 10 次
+  global-qps: 1000  # 全局限流：每秒 1000 次
+  user-qps: 10    # 用戶維度：每個用戶每秒 10 次
 ```
 
 ---
 
 ## 測試
 
-### 運行測試
-
-```bash
-# 運行所有測試
-./gradlew test
-
-# 運行特定測試類
-./gradlew test --tests LotteryServiceTest
-
-# 運行整合測試
-./gradlew test --tests LotteryServiceIntegrationTest
-```
-
 ### 測試用例
 
 #### 單元測試 (LotteryServiceTest)
 
-✅ **testSingleDrawSuccess** - 單次抽獎成功  
-✅ **testMultipleDraws** - 多次連續抽獎  
-✅ **testInsufficientDraws** - 抽獎次數不足  
-✅ **testActivityNotFound** - 活動不存在  
-✅ **testActivityEnded** - 活動已結束  
-✅ **testPrizeStockDeduction** - 獎品庫存扣減  
-✅ **testProbabilityDistribution** - 機率分布驗證（1000 次）  
-✅ **testDailyLimitMode** - 每日限制模式  
-✅ **testTotalLimitMode** - 總次數限制模式
+ **testSingleDrawSuccess** - 單次抽獎成功  
+ **testMultipleDraws** - 多次連續抽獎  
+ **testInsufficientDraws** - 抽獎次數不足  
+ **testActivityNotFound** - 活動不存在  
+ **testActivityEnded** - 活動已結束  
+ **testPrizeStockDeduction** - 獎品庫存扣減  
+ **testProbabilityDistribution** - 機率分布驗證（1000 次）  
+ **testDailyLimitMode** - 每日限制模式  
+ **testTotalLimitMode** - 總次數限制模式
 
 #### 整合測試 (LotteryServiceIntegrationTest)
 
-✅ **testDailyLimitExceeded** - 每日限制超出  
-✅ **testTotalLimitExceeded** - 總次數限制超出  
-✅ **testRateLimitExceeded** - 限流測試  
-✅ **testConcurrentDrawSafety** - 10 線程並發安全性  
-✅ **testActivityEnded** - 活動結束判斷
+ **testDailyLimitExceeded** - 每日限制超出  
+ **testTotalLimitExceeded** - 總次數限制超出  
+ **testRateLimitExceeded** - 限流測試  
+ **testConcurrentDrawSafety** - 10 線程並發安全性  
+ **testActivityEnded** - 活動結束判斷

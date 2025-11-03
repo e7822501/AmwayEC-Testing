@@ -11,8 +11,6 @@ import java.util.List;
 @Repository
 public interface LotteryActivityRepository extends JpaRepository<LotteryActivity, Long> {
 
-    List<LotteryActivity> findByStatus(LotteryActivity.ActivityStatus status);
-
     @Query("SELECT a FROM LotteryActivity a WHERE a.status = 'ACTIVE' " +
             "AND a.startTime <= :now AND a.endTime >= :now")
     List<LotteryActivity> findActiveActivities(LocalDateTime now);

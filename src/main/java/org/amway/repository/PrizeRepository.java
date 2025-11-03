@@ -17,9 +17,6 @@ public interface PrizeRepository extends JpaRepository<Prize, Long> {
 
     List<Prize> findByActivityId(Long activityId);
 
-    @Query("SELECT p FROM Prize p WHERE p.activity.id = :activityId AND p.remainingStock > 0")
-    List<Prize> findAvailablePrizesByActivityId(@Param("activityId") Long activityId);
-
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT p FROM Prize p WHERE p.id = :prizeId")
     Optional<Prize> findByIdWithLock(@Param("prizeId") Long prizeId);
